@@ -116,11 +116,6 @@ uint32_t get_key_size(uint8_t key_size_enum) {
   }
 }
 
-/*14. Signature verification uses unverified RSA public keys:
-This function ensures that 2 < E < N and performs a size check on N. In addition
-to this, in both of those functions, check that the size returned from
-mbedtls_mpi_bitlen(N) is equal to one of the valid key sizes.
- */
 int check_pubkey(mbedtls_mpi *N, mbedtls_mpi *E) {
   int err = 0;
   size_t key_size = mbedtls_mpi_size(N) * 8;
@@ -484,7 +479,6 @@ int validate_signature_iso9796_2(void *_p, const uint8_t *sig_buf,
   mbedtls_mpi N;
   mbedtls_mpi E;
 
-  // 12. Potential out-of-boundsread in validate_signature_iso9796_2
   if (sig_len < sizeof(RsaInfo)) {
     return ERROR_ISO97962_INVALID_ARG12;
   }
