@@ -13,6 +13,8 @@ int ckb_exit(signed char);
 #include <stdbool.h>
 #include <string.h>
 
+#include "ckb_consts.h"
+
 #include "blockchain-api2.h"
 #if defined(CKB_USE_SIM)
 #include "ckb_syscall_rce_validator_sim.h"
@@ -95,7 +97,11 @@ static int make_witness_cursor(uint8_t* buffer, uint32_t cache_size,
                       read_from_witness);
 }
 
-int main() {
+#ifdef CKB_USE_SIM
+int simulator_main() {
+#else
+  int main() {
+#endif
   uint8_t type_id[32];
   int err = ckb_load_type_id_from_script_args(0, type_id);
   if (err != CKB_SUCCESS) {
