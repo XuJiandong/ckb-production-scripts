@@ -4,6 +4,8 @@ project(ckb_production_scripts_simulator C)
 set(CMAKE_C_STANDARD 11)
 # uncomment it for sanitize
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fsanitize=undefined")
+# uncomment it for assembly
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -save-temps")
 
 # uncomment it for coverage test
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} --coverage")

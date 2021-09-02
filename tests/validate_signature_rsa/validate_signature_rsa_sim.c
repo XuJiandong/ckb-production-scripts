@@ -771,6 +771,123 @@ exit:
   return err;
 }
 
+#undef MULADDC_INIT
+#undef MULADDC_CORE
+#undef MULADDC_STOP
+
+#ifdef __riscv
+#define MULADDC_INIT asm volatile ( "xor a4, a4, a4\n"
+#define MULADDC_CORE "ld    a6, 0(a1)\n" \
+  "mulhu    a2, s1, a6\n" \
+  "mul    a6, s1, a6\n" \
+  "addi    a1, a1, 8\n" \
+  "add    a6, a6, a3\n" \
+  "sltu    t2, a6, a3\n" \
+  "add    a3, a4, zero\n" \
+  "add    a2, t2, a2\n" \
+  "ld    t6, 0(a0)\n" \
+  "add    t6, t6, a6\n" \
+  "sd    t6, 0(a0)\n" \
+  "add    a3, a3, t2\n" \
+  "sltu    t2, a3, t2\n" \
+  "add    a3, a3, a2\n" \
+  "sltu    a2, a3, a2\n" \
+  "or    t2, t2, a2\n" \
+  "addi    a0, a0, 8\n"
+
+#define MULADDC_STOP );
+#else
+
+#define ciL    (sizeof(mbedtls_mpi_uint))         /* chars in limb  */
+#define biL    (ciL << 3)               /* bits  in limb  */
+#define biH    (ciL << 2)               /* half limb size */
+
+#define MULADDC_INIT                    \
+{                                       \
+    mbedtls_t_udbl r;                           \
+    mbedtls_mpi_uint r0, r1;
+
+#define MULADDC_CORE                    \
+    r   = *(s++) * (mbedtls_t_udbl) b;          \
+    r0  = (mbedtls_mpi_uint) r;                   \
+    r1  = (mbedtls_mpi_uint)( r >> biL );         \
+    r0 += c;  r1 += (r0 <  c);          \
+    r0 += *d; r1 += (r0 < *d);          \
+    c = r1; *(d++) = r0;
+
+#define MULADDC_STOP                    \
+}
+
+#endif
+
+__attribute__ ((noinline))
+void mpi_mul_hlp_asm( size_t i, mbedtls_mpi_uint *s, mbedtls_mpi_uint *d, mbedtls_mpi_uint b )
+{
+#ifdef __riscv
+    register long a0 asm("a0") = (long)s;
+    register long a1 asm("a1") = (long)d;
+    register long a2 asm("a2") = (long)b;
+#endif
+
+    mbedtls_mpi_uint c = 0, t = 0;
+
+    for( ; i >= 16; i -= 16 )
+    {
+        MULADDC_INIT
+        MULADDC_CORE   MULADDC_CORE
+        MULADDC_CORE   MULADDC_CORE
+        MULADDC_CORE   MULADDC_CORE
+        MULADDC_CORE   MULADDC_CORE
+
+        MULADDC_CORE   MULADDC_CORE
+        MULADDC_CORE   MULADDC_CORE
+        MULADDC_CORE   MULADDC_CORE
+        MULADDC_CORE   MULADDC_CORE
+        MULADDC_STOP
+    }
+
+    for( ; i >= 8; i -= 8 )
+    {
+        MULADDC_INIT
+        MULADDC_CORE   MULADDC_CORE
+        MULADDC_CORE   MULADDC_CORE
+
+        MULADDC_CORE   MULADDC_CORE
+        MULADDC_CORE   MULADDC_CORE
+        MULADDC_STOP
+    }
+
+    for( ; i > 0; i-- )
+    {
+        MULADDC_INIT
+        MULADDC_CORE
+        MULADDC_STOP
+    }
+    t++;
+
+    do {
+        *d += c; c = ( *d < c ); d++;
+    }
+    while( c != 0 );
+}
+
+extern void mpi_mul_hlp( size_t i, mbedtls_mpi_uint *s, mbedtls_mpi_uint *d, mbedtls_mpi_uint b);
+
+int mpi_mul_hlp_verify(void) {
+  int i = 16;
+  mbedtls_mpi_uint s[16] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
+  mbedtls_mpi_uint d[16] = {0};
+  mbedtls_mpi_uint b = 13;
+  mpi_mul_hlp(i, s, d, b);
+
+  mbedtls_mpi_uint d2[16] = {0};
+  mpi_mul_hlp_asm(i, s, d2, b);
+
+  int res = memcmp(d, d2, sizeof(d));
+  return res;
+}
+
+
 int rsa_bench(void) {
   const char* sig = "0101000601000100E16057C1EAAE0326729925DB9733B45A80401F9F876FF7B8F95EC77334F54FF0016D7554C8EE40F2DFC3807CA2160D674FE2ABC3FB598E083EE610238F9F3DB401A09686FF025A668943133DA102E9B9F6C9B845776941FD2EF57D4035500E50FA74AFD8D0160C0692B39D5EB1AFD5A165D526371E7036680FFC014C2AD46CB85F26A4BCC9FE598896E2AFC6762BF705142BCC70815C2AD1D0093B16EEBA99E11D3C9162414AB59481B353B0A3C98030DB1E5E33B443A93283B1A72066282998F1D8C5BBF0A6699446B912AD0B3F7D6C976F0CF6B3CF1ABC3708399E770AD7A093A7B4FE669DB53817E54E68CEB2CD7B3D1635BBA58D1680BCB69D04CCC9294F";
   const char* msg = "0102030400000000000000000000000000000000000000000000000000000000";
@@ -792,9 +909,12 @@ exit:
 
 
 int main(int argc, const char* argv[]) {
-#ifndef CKB_USE_SIM
-  return rsa_bench();
-#endif
+  if (argc >= 2 && strcmp(argv[1], "bench") == 0){
+    return rsa_bench();
+  }
+  if (argc >= 2 && strcmp(argv[1], "mpi_mul_hlp_verify") == 0){
+    return mpi_mul_hlp_verify();
+  }
 
   if (argc >= 2) {
     if (strcmp(argv[1], "ckbvm") == 0) {

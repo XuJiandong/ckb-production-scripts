@@ -1,7 +1,7 @@
 #!/bin/bash
 
 CKB_DEBUGGER=ckb-debugger
-$CKB_DEBUGGER --simple-binary ../../build/validate_signature_rsa_sim --pprof=pprof.txt
+$CKB_DEBUGGER --simple-binary ../../build/validate_signature_rsa_sim --pprof=pprof.txt rsa bench
 cat pprof.txt | inferno-flamegraph > rsa.svg
 
 #echo "Functions statistics: "
