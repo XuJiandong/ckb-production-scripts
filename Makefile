@@ -56,6 +56,7 @@ $(SECP256K1_SRC):
 
 deps/mbedtls/library/libmbedcrypto.a:
 	cp deps/mbedtls-config-template.h deps/mbedtls/include/mbedtls/config.h
+	cp deps/bignum-template deps/mbedtls/library/bignum.c
 	#cp deps/mbedtls-makefile-template deps/mbedtls/library/Makefile
 	make -C deps/mbedtls/library CC=${CC} LD=${LD} CFLAGS="${PASSED_MBEDTLS_CFLAGS}" libmbedcrypto.a
 
@@ -79,9 +80,15 @@ CFLAGS_MBEDTLS2:=$(filter-out -Wno-nonnull,$(CFLAGS_MBEDTLS2))
 CFLAGS_MBEDTLS2:=$(filter-out -Wno-nonnull-compare,$(CFLAGS_MBEDTLS2))
 CFLAGS_MBEDTLS2:=$(filter-out -Wno-unused-function,$(CFLAGS_MBEDTLS2))
 CFLAGS_MBEDTLS2:=$(filter-out -Wall,$(CFLAGS_MBEDTLS2))
-build/validate_signature_rsa_sim: tests/validate_signature_rsa/validate_signature_rsa_sim.c deps/mbedtls/library/libmbedcrypto.a
+# disable -g temporiry
+# CFLAGS_MBEDTLS2:=$(filter-out -g,$(CFLAGS_MBEDTLS2))
+build/validate_signature_rsa_sim: tests/validate_signature_rsa/validate_signature_rsa_sim.c deps/mbedtls/library/libmbedcrypto.a build/mul_mont_1024.o
 	$(CC) $(CFLAGS_MBEDTLS2) $(LDFLAGS_MBEDTLS) -DCKB_RUN_IN_VM -o $@ $^
-	$(CC) -S $(CFLAGS_MBEDTLS2) $(LDFLAGS_MBEDTLS) -DCKB_RUN_IN_VM -o $@.S $<
+	#$(CC) -S $(CFLAGS_MBEDTLS2) $(LDFLAGS_MBEDTLS) -DCKB_RUN_IN_VM -o $@.S $<
+
+build/mul_mont_1024.o: tests/validate_signature_rsa/mul_mont_1024.S
+	$(CC) -c -DCKB_DECLARATION_ONLY $(CFLAGS_MBEDTLS2) -o $@ $<
+
 
 validate_signature_rsa_clean:
 	make -C deps/mbedtls/library clean

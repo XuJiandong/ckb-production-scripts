@@ -22,7 +22,7 @@
 
 enum ErrorCode {
   // 0 is the only success code. We can use 0 directly.
-  CKB_SUCCESS = 0,
+  // CKB_SUCCESS = 0,
   // error code is starting from 40, to avoid conflict with
   // common error code in other scripts.
   ERROR_RSA_INVALID_PARAM1 = 40,

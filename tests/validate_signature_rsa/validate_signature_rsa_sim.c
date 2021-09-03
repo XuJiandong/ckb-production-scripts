@@ -1,7 +1,8 @@
 
 // uncomment to enable printf in CKB-VM
-//#define CKB_C_STDLIB_PRINTF
-//#include <stdio.h>
+#define CKB_C_STDLIB_PRINTF
+#include <stdio.h>
+#include <ckb_syscalls.h>
 
 #if defined(CKB_COVERAGE) || defined(CKB_RUN_IN_VM)
 #define ASSERT(s) (void)0
@@ -796,6 +797,7 @@ exit:
   "addi    a0, a0, 8\n"
 
 #define MULADDC_STOP );
+
 #else
 
 #define ciL    (sizeof(mbedtls_mpi_uint))         /* chars in limb  */
@@ -816,7 +818,7 @@ exit:
     c = r1; *(d++) = r0;
 
 #define MULADDC_STOP                    \
-}
+    }
 
 #endif
 
@@ -824,12 +826,14 @@ __attribute__ ((noinline))
 void mpi_mul_hlp_asm( size_t i, mbedtls_mpi_uint *s, mbedtls_mpi_uint *d, mbedtls_mpi_uint b )
 {
 #ifdef __riscv
-    register long a0 asm("a0") = (long)s;
-    register long a1 asm("a1") = (long)d;
-    register long a2 asm("a2") = (long)b;
-#endif
-
+    register long d2 asm("a0") = (long)d;
+    register long s2 asm("a1") = (long)s;
+    register long b2 asm("s1") = (long)b;
+    register mbedtls_mpi_uint c asm("a3") = 0;
+    mbedtls_mpi_uint t = 0;
+#else
     mbedtls_mpi_uint c = 0, t = 0;
+#endif
 
     for( ; i >= 16; i -= 16 )
     {
@@ -887,6 +891,177 @@ int mpi_mul_hlp_verify(void) {
   return res;
 }
 
+// ---------------------
+// m' = -m^(-1) mod b
+static uint64_t ll_invert_limb(uint64_t a) {
+  uint64_t inv;
+
+  inv = (((a + 2u) & 4u) << 1) + a;
+  inv *= (2 - inv * a);
+  inv *= (2 - inv * a);
+  inv *= (2 - inv * a);
+  inv *= (2 - inv * a);
+  inv = -inv;
+  return inv;
+}
+
+// blst's C version of mul_mont.
+typedef uint64_t limb_t;
+typedef unsigned __int128 llimb_t;
+#define LIMB_T_BITS 64
+
+__attribute__((noinline)) void mul_mont_n(limb_t ret[], const limb_t a[],
+                                                 const limb_t b[],
+                                                 const limb_t p[], limb_t n0,
+                                                 size_t n) {
+  llimb_t limbx;
+  limb_t mask, borrow, mx, hi, tmp[n + 1], carry;
+  size_t i, j;
+
+  for (mx = b[0], hi = 0, i = 0; i < n; i++) {
+    limbx = (mx * (llimb_t)a[i]) + hi;
+    tmp[i] = (limb_t)limbx;
+    hi = (limb_t)(limbx >> LIMB_T_BITS);
+  }
+  mx = n0 * tmp[0];
+  tmp[i] = hi;
+
+  for (carry = 0, j = 0;;) {
+    limbx = (mx * (llimb_t)p[0]) + tmp[0];
+    hi = (limb_t)(limbx >> LIMB_T_BITS);
+    for (i = 1; i < n; i++) {
+      limbx = (mx * (llimb_t)p[i] + hi) + tmp[i];
+      tmp[i - 1] = (limb_t)limbx;
+      hi = (limb_t)(limbx >> LIMB_T_BITS);
+    }
+    limbx = tmp[i] + (hi + (llimb_t)carry);
+    tmp[i - 1] = (limb_t)limbx;
+    carry = (limb_t)(limbx >> LIMB_T_BITS);
+
+    if (++j == n) break;
+
+    for (mx = b[j], hi = 0, i = 0; i < n; i++) {
+      limbx = (mx * (llimb_t)a[i] + hi) + tmp[i];
+      tmp[i] = (limb_t)limbx;
+      hi = (limb_t)(limbx >> LIMB_T_BITS);
+    }
+    mx = n0 * tmp[0];
+    limbx = hi + (llimb_t)carry;
+    tmp[i] = (limb_t)limbx;
+    carry = (limb_t)(limbx >> LIMB_T_BITS);
+  }
+
+  for (borrow = 0, i = 0; i < n; i++) {
+    limbx = tmp[i] - (p[i] + (llimb_t)borrow);
+    ret[i] = (limb_t)limbx;
+    borrow = (limb_t)(limbx >> LIMB_T_BITS) & 1;
+  }
+
+  mask = carry - borrow;
+
+  for (i = 0; i < n; i++) ret[i] = (ret[i] & ~mask) | (tmp[i] & mask);
+}
+
+__attribute__((noinline)) 
+void mul_mont_1024(limb_t ret[], const limb_t a[], const limb_t b[],
+                  const limb_t p[], limb_t n0) {
+  size_t n = 16;                                                   
+  llimb_t limbx;
+  limb_t mask, borrow, mx, hi, tmp[n + 1], carry;
+  size_t i, j;
+
+  for (mx = b[0], hi = 0, i = 0; i < n; i++) {
+    limbx = (mx * (llimb_t)a[i]) + hi;
+    tmp[i] = (limb_t)limbx;
+    hi = (limb_t)(limbx >> LIMB_T_BITS);
+  }
+  mx = n0 * tmp[0];
+  tmp[i] = hi;
+
+  for (carry = 0, j = 0;;) {
+    limbx = (mx * (llimb_t)p[0]) + tmp[0];
+    hi = (limb_t)(limbx >> LIMB_T_BITS);
+    for (i = 1; i < n; i++) {
+      limbx = (mx * (llimb_t)p[i] + hi) + tmp[i];
+      tmp[i - 1] = (limb_t)limbx;
+      hi = (limb_t)(limbx >> LIMB_T_BITS);
+    }
+    limbx = tmp[i] + (hi + (llimb_t)carry);
+    tmp[i - 1] = (limb_t)limbx;
+    carry = (limb_t)(limbx >> LIMB_T_BITS);
+
+    if (++j == n) break;
+
+    for (mx = b[j], hi = 0, i = 0; i < n; i++) {
+      limbx = (mx * (llimb_t)a[i] + hi) + tmp[i];
+      tmp[i] = (limb_t)limbx;
+      hi = (limb_t)(limbx >> LIMB_T_BITS);
+    }
+    mx = n0 * tmp[0];
+    limbx = hi + (llimb_t)carry;
+    tmp[i] = (limb_t)limbx;
+    carry = (limb_t)(limbx >> LIMB_T_BITS);
+  }
+
+  for (borrow = 0, i = 0; i < n; i++) {
+    limbx = tmp[i] - (p[i] + (llimb_t)borrow);
+    ret[i] = (limb_t)limbx;
+    borrow = (limb_t)(limbx >> LIMB_T_BITS) & 1;
+  }
+
+  mask = carry - borrow;
+
+  for (i = 0; i < n; i++) ret[i] = (ret[i] & ~mask) | (tmp[i] & mask);
+}
+
+
+
+void mpi_montg_init( mbedtls_mpi_uint *mm, const mbedtls_mpi *N );
+void mpi_montmul( mbedtls_mpi *A, const mbedtls_mpi *B, const mbedtls_mpi *N, mbedtls_mpi_uint mm,
+                         const mbedtls_mpi *T );
+
+// asm version
+__attribute__((noinline)) void mul_mont_1024_asm(limb_t ret[], const limb_t a[],
+                                                 const limb_t b[],
+                                                 const limb_t p[], limb_t n0);
+int mul_mont_1024_verify() {
+  printf("running mul_mont_1024_verify\n");
+
+  // mbedtls's
+  mbedtls_mpi_uint a[16] = {1,2,3,4};
+  mbedtls_mpi A = {.n = 16, .p = a, .s = 1};
+  // a2: a copy of a
+  mbedtls_mpi_uint a2[16] = {1,2,3,4};
+  mbedtls_mpi A2 = {.n = 16, .p = a2, .s = 1};
+
+  mbedtls_mpi_uint b[16] = {2,3,4,5};
+  mbedtls_mpi B = {.n = 16, .p = b, .s = 1};
+  mbedtls_mpi_uint n[16] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14};
+  mbedtls_mpi N = {.n = 16, .p = n, .s = 1};
+  mbedtls_mpi_uint mm;
+  mpi_montg_init(&mm, &N);
+  mbedtls_mpi_uint t[64] = {0};
+  mbedtls_mpi T = {.n=64, .p = t, .s = 1};
+  mpi_montmul(&A, &B, &N, mm, &T);
+
+  // blst's
+  limb_t ret[16] = {0};
+  mul_mont_1024(ret, A2.p, B.p, N.p, mm);
+
+  int result = memcmp(ret, A.p, sizeof(ret));
+  if (result != 0) {
+    printf("mul_mont_1024_verify failed, not same");
+  }
+#ifndef CKB_USE_SIM
+  limb_t ret_asm[16] = {0};
+  mul_mont_1024_asm(ret_asm, A2.p, B.p, N.p, mm);
+  result = memcmp(ret_asm, A.p, sizeof(ret));
+  if (result != 0) {
+    printf("mul_mont_1024_verify failed, not same (asm)");
+  }
+#endif
+  return result;
+}
 
 int rsa_bench(void) {
   const char* sig = "0101000601000100E16057C1EAAE0326729925DB9733B45A80401F9F876FF7B8F95EC77334F54FF0016D7554C8EE40F2DFC3807CA2160D674FE2ABC3FB598E083EE610238F9F3DB401A09686FF025A668943133DA102E9B9F6C9B845776941FD2EF57D4035500E50FA74AFD8D0160C0692B39D5EB1AFD5A165D526371E7036680FFC014C2AD46CB85F26A4BCC9FE598896E2AFC6762BF705142BCC70815C2AD1D0093B16EEBA99E11D3C9162414AB59481B353B0A3C98030DB1E5E33B443A93283B1A72066282998F1D8C5BBF0A6699446B912AD0B3F7D6C976F0CF6B3CF1ABC3708399E770AD7A093A7B4FE669DB53817E54E68CEB2CD7B3D1635BBA58D1680BCB69D04CCC9294F";
@@ -914,6 +1089,9 @@ int main(int argc, const char* argv[]) {
   }
   if (argc >= 2 && strcmp(argv[1], "mpi_mul_hlp_verify") == 0){
     return mpi_mul_hlp_verify();
+  }
+  if (argc >= 2 && strcmp(argv[1], "mul_mont_1024_verify") == 0){
+    return mul_mont_1024_verify();
   }
 
   if (argc >= 2) {
