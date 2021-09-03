@@ -779,8 +779,8 @@ exit:
 #ifdef __riscv
 #define MULADDC_INIT asm volatile ( "xor a4, a4, a4\n"
 #define MULADDC_CORE "ld    a6, 0(a1)\n" \
-  "mulhu    a2, s1, a6\n" \
-  "mul    a6, s1, a6\n" \
+  "mulhu    a2, a5, a6\n" \
+  "mul    a6, a5, a6\n" \
   "addi    a1, a1, 8\n" \
   "add    a6, a6, a3\n" \
   "sltu    t2, a6, a3\n" \
@@ -796,8 +796,11 @@ exit:
   "or    t2, t2, a2\n" \
   "addi    a0, a0, 8\n"
 
-#define MULADDC_STOP );
-
+#define MULADDC_STOP \
+  : "+r"(c), "+r"(d2), "+r"(s2) \
+  : "r"(b2) \
+  : "t6", "t2", "a2", "a4", "a6"\
+  );
 #else
 
 #define ciL    (sizeof(mbedtls_mpi_uint))         /* chars in limb  */
@@ -828,7 +831,7 @@ void mpi_mul_hlp_asm( size_t i, mbedtls_mpi_uint *s, mbedtls_mpi_uint *d, mbedtl
 #ifdef __riscv
     register long d2 asm("a0") = (long)d;
     register long s2 asm("a1") = (long)s;
-    register long b2 asm("s1") = (long)b;
+    register long b2 asm("a5") = (long)b;
     register mbedtls_mpi_uint c asm("a3") = 0;
     mbedtls_mpi_uint t = 0;
 #else
@@ -878,16 +881,23 @@ void mpi_mul_hlp_asm( size_t i, mbedtls_mpi_uint *s, mbedtls_mpi_uint *d, mbedtl
 extern void mpi_mul_hlp( size_t i, mbedtls_mpi_uint *s, mbedtls_mpi_uint *d, mbedtls_mpi_uint b);
 
 int mpi_mul_hlp_verify(void) {
-  int i = 16;
+  int res = 0;
+  printf("start mpi_mul_hlp_verify()");
+  int N = 16;
   mbedtls_mpi_uint s[16] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16};
   mbedtls_mpi_uint d[16] = {0};
-  mbedtls_mpi_uint b = 13;
-  mpi_mul_hlp(i, s, d, b);
+  mbedtls_mpi_uint b = 67771;
+  mpi_mul_hlp(N, s, d, b);
 
-  mbedtls_mpi_uint d2[16] = {0};
-  mpi_mul_hlp_asm(i, s, d2, b);
-
-  int res = memcmp(d, d2, sizeof(d));
+  for (int index = 0; index < 10; index++) {
+    mbedtls_mpi_uint d2[16] = {0};
+    mpi_mul_hlp_asm(N, s, d2, b);
+    res = memcmp(d, d2, sizeof(d));
+    if (res != 0) {
+      printf("mpi_mul_hlp_verify failed at index %i\n", index);
+      break;
+    }
+  }
   return res;
 }
 

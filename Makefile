@@ -81,10 +81,10 @@ CFLAGS_MBEDTLS2:=$(filter-out -Wno-nonnull-compare,$(CFLAGS_MBEDTLS2))
 CFLAGS_MBEDTLS2:=$(filter-out -Wno-unused-function,$(CFLAGS_MBEDTLS2))
 CFLAGS_MBEDTLS2:=$(filter-out -Wall,$(CFLAGS_MBEDTLS2))
 # disable -g temporiry
-# CFLAGS_MBEDTLS2:=$(filter-out -g,$(CFLAGS_MBEDTLS2))
+CFLAGS_MBEDTLS2:=$(filter-out -g,$(CFLAGS_MBEDTLS2))
 build/validate_signature_rsa_sim: tests/validate_signature_rsa/validate_signature_rsa_sim.c deps/mbedtls/library/libmbedcrypto.a build/mul_mont_1024.o
 	$(CC) $(CFLAGS_MBEDTLS2) $(LDFLAGS_MBEDTLS) -DCKB_RUN_IN_VM -o $@ $^
-	#$(CC) -S $(CFLAGS_MBEDTLS2) $(LDFLAGS_MBEDTLS) -DCKB_RUN_IN_VM -o $@.S $<
+	$(CC) -S $(CFLAGS_MBEDTLS2) $(LDFLAGS_MBEDTLS) -DCKB_RUN_IN_VM -o $@.S $<
 
 build/mul_mont_1024.o: tests/validate_signature_rsa/mul_mont_1024.S
 	$(CC) -c -DCKB_DECLARATION_ONLY $(CFLAGS_MBEDTLS2) -o $@ $<

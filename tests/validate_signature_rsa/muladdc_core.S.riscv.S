@@ -2,8 +2,8 @@
 # movq    (%rsi), %rax
 ld    a6, 0(a1)
 # mulq    %rbx
-mulhu    a2, s1, a6
-mul    a6, s1, a6
+mulhu    a2, a5, a6
+mul    a6, a5, a6
 # addq    $8, %rsi
 addi    a1, a1, 8
 # addq    %rcx, %rax
