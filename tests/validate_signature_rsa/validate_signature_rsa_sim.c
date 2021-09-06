@@ -775,8 +775,11 @@ exit:
 #undef MULADDC_INIT
 #undef MULADDC_CORE
 #undef MULADDC_STOP
+// #define USE_INLINE_RISCV 1
+// #define USE_X86_64
+#define USE_RISCV
 
-#ifdef __riscv
+#if defined(__riscv) && defined(USE_INLINE_RISCV)
 #define MULADDC_INIT asm volatile ( "xor a4, a4, a4\n"
 #define MULADDC_CORE "ld    a6, 0(a1)\n" \
   "mulhu    a2, a5, a6\n" \
@@ -788,6 +791,7 @@ exit:
   "add    a2, t2, a2\n" \
   "ld    t6, 0(a0)\n" \
   "add    t6, t6, a6\n" \
+  "sltu   t2, t6, a6\n" \
   "sd    t6, 0(a0)\n" \
   "add    a3, a3, t2\n" \
   "sltu    t2, a3, t2\n" \
@@ -801,11 +805,39 @@ exit:
   : "r"(b2) \
   : "t6", "t2", "a2", "a4", "a6"\
   );
-#else
 
+#elif defined(__riscv) && defined(USE_RISCV)
+
+__attribute__ ((noinline))
+void mpi_mul_hlp_asm( size_t i, mbedtls_mpi_uint *s, mbedtls_mpi_uint *d, mbedtls_mpi_uint b);
+
+#elif defined(USE_X86_64)
+#define MULADDC_INIT                        \
+    asm(                                    \
+        "xorq   %%r8, %%r8\n"
+
+#define MULADDC_CORE                        \
+        "movq   (%%rsi), %%rax\n"           \
+        "mulq   %%rbx\n"                    \
+        "addq   $8, %%rsi\n"                \
+        "addq   %%rcx, %%rax\n"             \
+        "movq   %%r8, %%rcx\n"              \
+        "adcq   $0, %%rdx\n"                \
+        "nop    \n"                         \
+        "addq   %%rax, (%%rdi)\n"           \
+        "adcq   %%rdx, %%rcx\n"             \
+        "addq   $8, %%rdi\n"
+
+#define MULADDC_STOP                        \
+        : "+c" (c), "+D" (d), "+S" (s)      \
+        : "b" (b)                           \
+        : "rax", "rdx", "r8"                \
+    );
+#else
 #define ciL    (sizeof(mbedtls_mpi_uint))         /* chars in limb  */
 #define biL    (ciL << 3)               /* bits  in limb  */
 #define biH    (ciL << 2)               /* half limb size */
+typedef unsigned __int128 mbedtls_t_udbl;
 
 #define MULADDC_INIT                    \
 {                                       \
@@ -825,10 +857,11 @@ exit:
 
 #endif
 
+#ifndef USE_RISCV
 __attribute__ ((noinline))
 void mpi_mul_hlp_asm( size_t i, mbedtls_mpi_uint *s, mbedtls_mpi_uint *d, mbedtls_mpi_uint b )
 {
-#ifdef __riscv
+#if defined(__riscv) && defined(USE_RISCV)
     register long d2 asm("a0") = (long)d;
     register long s2 asm("a1") = (long)s;
     register long b2 asm("a5") = (long)b;
@@ -877,6 +910,7 @@ void mpi_mul_hlp_asm( size_t i, mbedtls_mpi_uint *s, mbedtls_mpi_uint *d, mbedtl
     }
     while( c != 0 );
 }
+#endif
 
 extern void mpi_mul_hlp( size_t i, mbedtls_mpi_uint *s, mbedtls_mpi_uint *d, mbedtls_mpi_uint b);
 
@@ -899,178 +933,6 @@ int mpi_mul_hlp_verify(void) {
     }
   }
   return res;
-}
-
-// ---------------------
-// m' = -m^(-1) mod b
-static uint64_t ll_invert_limb(uint64_t a) {
-  uint64_t inv;
-
-  inv = (((a + 2u) & 4u) << 1) + a;
-  inv *= (2 - inv * a);
-  inv *= (2 - inv * a);
-  inv *= (2 - inv * a);
-  inv *= (2 - inv * a);
-  inv = -inv;
-  return inv;
-}
-
-// blst's C version of mul_mont.
-typedef uint64_t limb_t;
-typedef unsigned __int128 llimb_t;
-#define LIMB_T_BITS 64
-
-__attribute__((noinline)) void mul_mont_n(limb_t ret[], const limb_t a[],
-                                                 const limb_t b[],
-                                                 const limb_t p[], limb_t n0,
-                                                 size_t n) {
-  llimb_t limbx;
-  limb_t mask, borrow, mx, hi, tmp[n + 1], carry;
-  size_t i, j;
-
-  for (mx = b[0], hi = 0, i = 0; i < n; i++) {
-    limbx = (mx * (llimb_t)a[i]) + hi;
-    tmp[i] = (limb_t)limbx;
-    hi = (limb_t)(limbx >> LIMB_T_BITS);
-  }
-  mx = n0 * tmp[0];
-  tmp[i] = hi;
-
-  for (carry = 0, j = 0;;) {
-    limbx = (mx * (llimb_t)p[0]) + tmp[0];
-    hi = (limb_t)(limbx >> LIMB_T_BITS);
-    for (i = 1; i < n; i++) {
-      limbx = (mx * (llimb_t)p[i] + hi) + tmp[i];
-      tmp[i - 1] = (limb_t)limbx;
-      hi = (limb_t)(limbx >> LIMB_T_BITS);
-    }
-    limbx = tmp[i] + (hi + (llimb_t)carry);
-    tmp[i - 1] = (limb_t)limbx;
-    carry = (limb_t)(limbx >> LIMB_T_BITS);
-
-    if (++j == n) break;
-
-    for (mx = b[j], hi = 0, i = 0; i < n; i++) {
-      limbx = (mx * (llimb_t)a[i] + hi) + tmp[i];
-      tmp[i] = (limb_t)limbx;
-      hi = (limb_t)(limbx >> LIMB_T_BITS);
-    }
-    mx = n0 * tmp[0];
-    limbx = hi + (llimb_t)carry;
-    tmp[i] = (limb_t)limbx;
-    carry = (limb_t)(limbx >> LIMB_T_BITS);
-  }
-
-  for (borrow = 0, i = 0; i < n; i++) {
-    limbx = tmp[i] - (p[i] + (llimb_t)borrow);
-    ret[i] = (limb_t)limbx;
-    borrow = (limb_t)(limbx >> LIMB_T_BITS) & 1;
-  }
-
-  mask = carry - borrow;
-
-  for (i = 0; i < n; i++) ret[i] = (ret[i] & ~mask) | (tmp[i] & mask);
-}
-
-__attribute__((noinline)) 
-void mul_mont_1024(limb_t ret[], const limb_t a[], const limb_t b[],
-                  const limb_t p[], limb_t n0) {
-  size_t n = 16;                                                   
-  llimb_t limbx;
-  limb_t mask, borrow, mx, hi, tmp[n + 1], carry;
-  size_t i, j;
-
-  for (mx = b[0], hi = 0, i = 0; i < n; i++) {
-    limbx = (mx * (llimb_t)a[i]) + hi;
-    tmp[i] = (limb_t)limbx;
-    hi = (limb_t)(limbx >> LIMB_T_BITS);
-  }
-  mx = n0 * tmp[0];
-  tmp[i] = hi;
-
-  for (carry = 0, j = 0;;) {
-    limbx = (mx * (llimb_t)p[0]) + tmp[0];
-    hi = (limb_t)(limbx >> LIMB_T_BITS);
-    for (i = 1; i < n; i++) {
-      limbx = (mx * (llimb_t)p[i] + hi) + tmp[i];
-      tmp[i - 1] = (limb_t)limbx;
-      hi = (limb_t)(limbx >> LIMB_T_BITS);
-    }
-    limbx = tmp[i] + (hi + (llimb_t)carry);
-    tmp[i - 1] = (limb_t)limbx;
-    carry = (limb_t)(limbx >> LIMB_T_BITS);
-
-    if (++j == n) break;
-
-    for (mx = b[j], hi = 0, i = 0; i < n; i++) {
-      limbx = (mx * (llimb_t)a[i] + hi) + tmp[i];
-      tmp[i] = (limb_t)limbx;
-      hi = (limb_t)(limbx >> LIMB_T_BITS);
-    }
-    mx = n0 * tmp[0];
-    limbx = hi + (llimb_t)carry;
-    tmp[i] = (limb_t)limbx;
-    carry = (limb_t)(limbx >> LIMB_T_BITS);
-  }
-
-  for (borrow = 0, i = 0; i < n; i++) {
-    limbx = tmp[i] - (p[i] + (llimb_t)borrow);
-    ret[i] = (limb_t)limbx;
-    borrow = (limb_t)(limbx >> LIMB_T_BITS) & 1;
-  }
-
-  mask = carry - borrow;
-
-  for (i = 0; i < n; i++) ret[i] = (ret[i] & ~mask) | (tmp[i] & mask);
-}
-
-
-
-void mpi_montg_init( mbedtls_mpi_uint *mm, const mbedtls_mpi *N );
-void mpi_montmul( mbedtls_mpi *A, const mbedtls_mpi *B, const mbedtls_mpi *N, mbedtls_mpi_uint mm,
-                         const mbedtls_mpi *T );
-
-// asm version
-__attribute__((noinline)) void mul_mont_1024_asm(limb_t ret[], const limb_t a[],
-                                                 const limb_t b[],
-                                                 const limb_t p[], limb_t n0);
-int mul_mont_1024_verify() {
-  printf("running mul_mont_1024_verify\n");
-
-  // mbedtls's
-  mbedtls_mpi_uint a[16] = {1,2,3,4};
-  mbedtls_mpi A = {.n = 16, .p = a, .s = 1};
-  // a2: a copy of a
-  mbedtls_mpi_uint a2[16] = {1,2,3,4};
-  mbedtls_mpi A2 = {.n = 16, .p = a2, .s = 1};
-
-  mbedtls_mpi_uint b[16] = {2,3,4,5};
-  mbedtls_mpi B = {.n = 16, .p = b, .s = 1};
-  mbedtls_mpi_uint n[16] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14};
-  mbedtls_mpi N = {.n = 16, .p = n, .s = 1};
-  mbedtls_mpi_uint mm;
-  mpi_montg_init(&mm, &N);
-  mbedtls_mpi_uint t[64] = {0};
-  mbedtls_mpi T = {.n=64, .p = t, .s = 1};
-  mpi_montmul(&A, &B, &N, mm, &T);
-
-  // blst's
-  limb_t ret[16] = {0};
-  mul_mont_1024(ret, A2.p, B.p, N.p, mm);
-
-  int result = memcmp(ret, A.p, sizeof(ret));
-  if (result != 0) {
-    printf("mul_mont_1024_verify failed, not same");
-  }
-#ifndef CKB_USE_SIM
-  limb_t ret_asm[16] = {0};
-  mul_mont_1024_asm(ret_asm, A2.p, B.p, N.p, mm);
-  result = memcmp(ret_asm, A.p, sizeof(ret));
-  if (result != 0) {
-    printf("mul_mont_1024_verify failed, not same (asm)");
-  }
-#endif
-  return result;
 }
 
 int rsa_bench(void) {
@@ -1099,9 +961,6 @@ int main(int argc, const char* argv[]) {
   }
   if (argc >= 2 && strcmp(argv[1], "mpi_mul_hlp_verify") == 0){
     return mpi_mul_hlp_verify();
-  }
-  if (argc >= 2 && strcmp(argv[1], "mul_mont_1024_verify") == 0){
-    return mul_mont_1024_verify();
   }
 
   if (argc >= 2) {
